@@ -1,35 +1,42 @@
 import os
-import shutil
-import time
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-
 from dotenv import load_dotenv
-load_dotenv()
 
-# -------------------- API KEY --------------------
+# Load env
+load_dotenv()
 api_key = os.getenv("GOOGLE_API_KEY")
+
+# FastAPI app
+app = FastAPI()
+
+# CORS (IMPORTANT for frontend)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # -------------------- LLM --------------------
 from llama_index.llms.google_genai import GoogleGenAI
 
 llm = GoogleGenAI(
     model="gemini-2.5-flash",
-    api_key=api_key,
-    temperature=0.2
+    api_key=api_key
 )
 
-# -------------------- EMBEDDINGS --------------------
+# -------------------- Embeddings --------------------
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 
 embed_model = HuggingFaceEmbedding(
     model_name="sentence-transformers/all-MiniLM-L6-v2"
 )
 
-# -------------------- SETTINGS --------------------
+# -------------------- Settings --------------------
 from llama_index.core import Settings
+
 Settings.llm = llm
 Settings.embed_model = embed_model
 
@@ -40,133 +47,95 @@ from llama_index.vector_stores.faiss import FaissVectorStore
 faiss_index = faiss.IndexFlatL2(384)
 vector_store = FaissVectorStore(faiss_index=faiss_index)
 
-# -------------------- DOC LOADER --------------------
+# -------------------- Load Docs --------------------
 from llama_index.core import SimpleDirectoryReader, VectorStoreIndex
 from llama_index.core.node_parser import SimpleNodeParser
 
-DATA_PATH = "data"
-os.makedirs(DATA_PATH, exist_ok=True)
+def load_index():
+    print("⚡ Loading documents...")
 
-import os
-from llama_index.core import StorageContext, load_index_from_storage
-
-PERSIST_DIR = "storage"
-
-def build_index():
-    import os
-    from llama_index.core import StorageContext, load_index_from_storage
-
-    PERSIST_DIR = "storage"
-
-    # ✅ Load from storage if exists
-    if os.path.exists(PERSIST_DIR):
-        print("⚡ Loading index from storage...")
-        storage_context = StorageContext.from_defaults(persist_dir=PERSIST_DIR)
-        return load_index_from_storage(storage_context)
-
-    print("⚡ Creating new index...")
-
-    documents = SimpleDirectoryReader(
-        DATA_PATH,
-        required_exts=[".pdf", ".txt"]
-    ).load_data()
+    documents = SimpleDirectoryReader("data").load_data()
 
     parser = SimpleNodeParser.from_defaults(
-        chunk_size=700,
-        chunk_overlap=100
+        chunk_size=200,
+        chunk_overlap=40
     )
 
-    # 🔥 STEP 1: Create chunks
     nodes = parser.get_nodes_from_documents(documents)
 
-    print(f"Before filtering: {len(nodes)}")
+    print(f"✅ Total chunks: {len(nodes)}")
 
-    # 🔥 STEP 2: FILTER BAD CHUNKS (ADD HERE ✅)
-    nodes = [n for n in nodes if len(n.text.strip()) > 50]
+    index = VectorStoreIndex(
+        nodes,
+        vector_store=vector_store
+    )
 
-    print(f"After filtering: {len(nodes)}")
-
-    # 🔥 STEP 3: Create index
-    index = VectorStoreIndex(nodes, vector_store=vector_store)
-
-    # 🔥 STEP 4: Save index
-    index.storage_context.persist(persist_dir=PERSIST_DIR)
-
-    print("✅ Index saved!")
+    print("✅ Index ready!")
 
     return index
 
+# -------------------- GLOBAL INDEX (LAZY LOAD) --------------------
+index = None   # ✅ IMPORTANT FIX
 
-# -------------------- FASTAPI --------------------
-app = FastAPI()
+# -------------------- Prompt --------------------
+from llama_index.core.prompts import PromptTemplate
 
-# CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-index = None
-
-@app.on_event("startup")
-def startup():
-    global index
-    index = build_index()
-
-
-# -------------------- REQUEST MODEL --------------------
-class QueryRequest(BaseModel):
-    question: str
-    history: list = []   # chat memory
-
-
-# -------------------- STREAMING CHAT --------------------
-@app.post("/chat")
-def chat(req: QueryRequest):
+def query_rag(index, question):
+    qa_prompt = PromptTemplate(
+        "You are a helpful AI assistant.\n"
+        "Answer ONLY from the provided context.\n"
+        "If answer is not present, say 'Answer not found in document'.\n\n"
+        "Context:\n{context_str}\n\n"
+        "Question: {query_str}\n"
+        "Answer:"
+    )
 
     query_engine = index.as_query_engine(
         similarity_top_k=5,
-        response_mode="compact"   
+        text_qa_template=qa_prompt
     )
 
-    # 🔥 Add chat history into prompt
-    history_text = "\n".join([f"{m['role']}: {m['text']}" for m in req.history])
+    response = query_engine.query(question)
 
-    final_query = f"""
-    Conversation History:
-    {history_text}
+    return str(response)
 
-    User Question:
-    {req.question}
-    """
+# -------------------- ROUTES --------------------
 
-    response = query_engine.query(final_query)
-    answer = str(response)
+# ✅ Health check (IMPORTANT for Render)
+@app.get("/")
+def home():
+    return {"status": "API is running 🚀"}
 
-    def stream():
-        for word in answer.split():
-            yield word + " "
-            time.sleep(0.02)
+# -------------------- CHAT --------------------
+from pydantic import BaseModel
 
-    return StreamingResponse(stream(), media_type="text/plain")
+class ChatRequest(BaseModel):
+    question: str
 
+@app.post("/chat")
+async def chat(req: ChatRequest):
+    global index
 
-# -------------------- PDF UPLOAD --------------------
+    # ✅ LAZY LOADING FIX
+    if index is None:
+        print("⚡ First request → creating index...")
+        index = load_index()
+
+    answer = query_rag(index, req.question)
+
+    return {"answer": answer}
+
+# -------------------- FILE UPLOAD --------------------
 @app.post("/upload")
 async def upload(file: UploadFile = File(...)):
-    file_path = os.path.join(DATA_PATH, file.filename)
-
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-
-    # rebuild index after upload
     global index
-    index = build_index()
 
-    return {"message": "File uploaded & indexed successfully"}
+    file_path = f"data/{file.filename}"
 
+    with open(file_path, "wb") as f:
+        f.write(await file.read())
 
+    # ✅ RELOAD INDEX AFTER UPLOAD
+    index = load_index()
 
+    return {"message": "File uploaded & index updated successfully"}
