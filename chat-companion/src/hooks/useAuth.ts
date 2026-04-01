@@ -39,9 +39,8 @@ export function useAuth() {
   }, []);
 
   const loginWithGoogle = useCallback(async () => {
-    // Explicitly define the absolute local URL instead of window.location.origin
-    // Change exactly to whichever port Vite runs on (e.g. 5173 or 8080)
-    const localUrl = "http://116.202.210.102:10055"; 
+    // Dynamically get the current URL (works on both localhost and Vercel)
+    const localUrl = window.location.origin; 
     
     console.log("Redirecting to: ", localUrl);
     
