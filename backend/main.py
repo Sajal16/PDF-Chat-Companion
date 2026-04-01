@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from llama_index.core.llms import ChatMessage
 
 # Load env
 load_dotenv()
@@ -136,33 +137,30 @@ class QueryRequest(BaseModel):
 
 # -------------------- STREAMING CHAT -------------------
 @app.post("/chat")
-def chat(req: QueryRequest):
-
-    query_engine = index.as_query_engine(
-        similarity_top_k=5,
-        response_mode="compact"   
+async def chat(req: QueryRequest):
+    global index
+    
+    # 1. Initialize chat engine with streaming enabled
+    chat_engine = index.as_chat_engine(
+        chat_mode="context", 
+        streaming=True,
+        similarity_top_k=5
     )
 
-    # 🔥 Add chat history into prompt
-    history_text = "\n".join([f"{m['role']}: {m['text']}" for m in req.history])
+    # 2. Map history to LlamaIndex ChatMessage objects
+    chat_history = [
+        ChatMessage(role=m["role"], content=m["text"]) 
+        for m in req.history
+    ]
 
-    final_query = f"""
-    Conversation History:
-    {history_text}
+    # 3. Get streaming response
+    response = chat_engine.stream_chat(req.question, chat_history=chat_history)
 
-    User Question:
-    {req.question}
-    """
+    async def stream_generator():
+        for token in response.response_gen:
+            yield token
 
-    response = query_engine.query(final_query)
-    answer = str(response)
-
-    def stream():
-        for word in answer.split():
-            yield word + " "
-            time.sleep(0.02)
-
-    return StreamingResponse(stream(), media_type="text/plain")
+    return StreamingResponse(stream_generator(), media_type="text/plain")
 
 
 # -------------------- PDF UPLOAD --------------------
