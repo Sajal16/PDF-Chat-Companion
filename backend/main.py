@@ -134,7 +134,7 @@ class QueryRequest(BaseModel):
     history: list = []   # chat memory
 
 
-# -------------------- STREAMING CHAT --------------------
+# -------------------- STREAMING CHAT -------------------
 @app.post("/chat")
 def chat(req: QueryRequest):
 
@@ -173,9 +173,12 @@ async def upload(file: UploadFile = File(...)):
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
+    # Delete old cached database so we can recreate it with completely new PDFs
+    if os.path.exists(PERSIST_DIR):
+        shutil.rmtree(PERSIST_DIR)
+
     # rebuild index after upload
     global index
     index = build_index()
 
     return {"message": "File uploaded & indexed successfully"}
-
