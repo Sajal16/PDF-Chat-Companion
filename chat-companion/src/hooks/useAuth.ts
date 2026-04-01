@@ -39,8 +39,8 @@ export function useAuth() {
   }, []);
 
   const loginWithGoogle = useCallback(async () => {
-    // Dynamically get the current URL (works on both localhost and Vercel)
-    const localUrl = window.location.origin; 
+    // Prefer explicitly set VITE_SITE_URL environment variable, fallback to window.location.origin
+    const localUrl = import.meta.env.VITE_SITE_URL || window.location.origin; 
     
     console.log("Redirecting to: ", localUrl);
     
