@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: rag-companion-backend
+    env: python
+    buildCommand: "pip install -r backend/requirements.txt"
+    startCommand: "cd backend && gunicorn -w 1 -k uvicorn.workers.UvicornWorker main:app --timeout 120 --bind 0.0.0.0:$PORT"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.12

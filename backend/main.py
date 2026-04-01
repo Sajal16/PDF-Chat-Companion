@@ -67,6 +67,12 @@ def build_index():
 
     print("⚡ Creating new index...")
 
+    # Prevent ValueError if data directory is initially empty on deploy
+    has_docs = any(f.endswith('.pdf') or f.endswith('.txt') for f in os.listdir(DATA_PATH))
+    if not has_docs:
+        with open(os.path.join(DATA_PATH, "dummy.txt"), "w") as f:
+            f.write("System initialized. Awaiting user documents.")
+
     documents = SimpleDirectoryReader(
         DATA_PATH,
         required_exts=[".pdf", ".txt"]
