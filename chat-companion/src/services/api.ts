@@ -7,7 +7,7 @@
  *   POST /upload — FormData with file → { success: boolean, filename: string }
  */
 
-const BASE_URL = "http://localhost:8000"; // Change to your FastAPI URL
+const BASE_URL = "http://116.202.210.102:10055"; // Your deployed FastAPI URL
 
 // Toggle this to false when connecting to real backend
 const USE_MOCK = false;
@@ -93,5 +93,5 @@ export async function uploadFile(
   // Real backend returns { "message": "..." }
   // Our frontend expects { "success": boolean, "filename": string }
   const data = await res.json();
-  return { success: true, filename: file.name, message: data.message };
+  return { success: true, filename: file.name };
 }
