@@ -7,7 +7,8 @@
  *   POST /upload — FormData with file → { success: boolean, filename: string }
  */
 
-const BASE_URL = "http://116.202.210.102:10055"; // Your deployed FastAPI URL
+// Use VITE_API_URL for production backend, fallback to current origin for local development/proxies
+const BASE_URL = import.meta.env.VITE_API_URL || window.location.origin;
 
 // Toggle this to false when connecting to real backend
 const USE_MOCK = false;
