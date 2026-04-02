@@ -40,10 +40,10 @@ export function useAuth() {
 
   const loginWithGoogle = useCallback(async () => {
     // Prefer explicitly set VITE_SITE_URL environment variable, fallback to window.location.origin
-    const localUrl = import.meta.env.VITE_SITE_URL || window.location.origin; 
-    
+    const localUrl = import.meta.env.VITE_SITE_URL || window.location.origin;
+
     console.log("Redirecting to: ", localUrl);
-    
+
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
@@ -66,8 +66,8 @@ export function useAuth() {
 
   const signup = useCallback(
     async (email: string, password: string, name: string): Promise<{ success: boolean; error?: string }> => {
-      const { error } = await supabase.auth.signUp({ 
-        email, 
+      const { error } = await supabase.auth.signUp({
+        email,
         password,
         options: {
           data: {
