@@ -112,7 +112,8 @@ app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://pdf-chat-companion.vercel.app"
+        "https://pdf-chat-companion.vercel.app",
+        "http://116.202.210.102"
     ],
     allow_credentials=True,
     allow_methods=["*"],
