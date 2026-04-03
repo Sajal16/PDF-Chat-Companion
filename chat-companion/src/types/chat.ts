@@ -2,11 +2,9 @@ export interface Message {
   id: string;
   role: "user" | "bot" | "file";
   content: string;
-  timestamp: number;
-
-  // Optional file metadata
   fileName?: string;
   fileType?: string;
+  timestamp: number;
 }
 
 export interface ChatSession {
@@ -16,12 +14,9 @@ export interface ChatSession {
   createdAt: number;
   updatedAt: number;
   hasDocuments: boolean;
-
-  // ✅ NEW: backend session isolation
-  backendSessionId?: string;
 }
 
-export type UploadStatus =
-  | { type: "uploading"; message: string }
-  | { type: "success"; message: string }
-  | { type: "error"; message: string };
+export interface UploadStatus {
+  type: "uploading" | "success" | "error";
+  message: string;
+}

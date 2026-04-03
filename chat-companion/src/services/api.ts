@@ -1,79 +1,85 @@
 /**
- * API Service — Connects frontend to FastAPI backend
+ * API Service — Mock backend that simulates FastAPI endpoints.
+ * 
+ * Replace BASE_URL with your FastAPI server URL when ready.
+ * Endpoints expected:
+ *   POST /chat   — { question: string, history: Message[] } → streamed text
+ *   POST /upload — FormData with file → { success: boolean, filename: string }
  */
 
-const BASE_URL = "http://116.202.210.102:10055"; // your backend
+const BASE_URL = "http://116.202.210.102:10055"; // Your deployed FastAPI URL
 
-// Set to false for real backend
+// Toggle this to false when connecting to real backend
 const USE_MOCK = false;
 
-/** ---------------- MOCK STREAM (optional) ---------------- */
+/** Simulates streaming by yielding words with delay */
 async function* mockStreamResponse(question: string): AsyncGenerator<string> {
   const responses = [
     `Based on the uploaded documents, here's what I found regarding "${question}":`,
-    "\n\nThe documents indicate several key points related to your query.",
-    " This includes important insights extracted from the uploaded file.",
-    "\n\nWould you like more details?",
+    "\n\nThe documents indicate several key points that are relevant to your query.",
+    " First, the primary concepts outlined in the uploaded materials suggest",
+    " a comprehensive approach to the topic.",
+    " Additionally, cross-referencing multiple sections reveals",
+    " important connections between the data points.",
+    "\n\nWould you like me to elaborate on any specific aspect?",
   ];
-
   for (const chunk of responses) {
     for (const word of chunk.split(/(?<=\s)/)) {
-      await new Promise((r) => setTimeout(r, 30));
+      await new Promise((r) => setTimeout(r, 30 + Math.random() * 40));
       yield word;
     }
   }
 }
 
-/** ---------------- CHAT API ---------------- */
+/**
+ * POST /chat — streams AI response
+ * In mock mode, simulates word-by-word streaming.
+ */
 export async function* streamChat(
   question: string,
-  history: { role: string; content: string }[],
-  session_id: string
+  history: { role: string; content: string }[]
 ): AsyncGenerator<string> {
   if (USE_MOCK) {
     yield* mockStreamResponse(question);
     return;
   }
 
+  // Real backend integration:
+  // Map history to match the backend expectation ({ role: string, text: string })
+  const mappedHistory = history.map(h => ({ role: h.role, text: h.content }));
+  
   const res = await fetch(`${BASE_URL}/chat`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      session_id,
-      question,
-      history, // ✅ correct format
-    }),
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question, history: mappedHistory }),
   });
 
-  if (!res.ok) {
-    throw new Error("Chat request failed");
-  }
+  if (!res.ok) throw new Error("Chat request failed");
 
   const reader = res.body?.getReader();
   const decoder = new TextDecoder();
-
-  if (!reader) {
-    throw new Error("No response body");
-  }
+  if (!reader) throw new Error("No response body");
 
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
-
     yield decoder.decode(value, { stream: true });
   }
 }
 
-/** ---------------- FILE UPLOAD ---------------- */
+/**
+ * POST /upload — uploads a file
+ * In mock mode, simulates a 1.5s upload delay.
+ */
 export async function uploadFile(
   file: File
-): Promise<{ session_id: string }> {
+): Promise<{ success: boolean; filename: string }> {
   if (USE_MOCK) {
-    return { session_id: "mock-session-id" };
+    await new Promise((r) => setTimeout(r, 1500));
+    return { success: true, filename: file.name };
   }
 
+  // Real backend integration:
   const formData = new FormData();
   formData.append("file", file);
 
@@ -82,10 +88,10 @@ export async function uploadFile(
     body: formData,
   });
 
-  if (!res.ok) {
-    throw new Error("Upload failed");
-  }
-
-  // ✅ backend returns { session_id }
-  return await res.json();
+  if (!res.ok) throw new Error("Upload failed");
+  
+  // Real backend returns { "message": "..." }
+  // Our frontend expects { "success": boolean, "filename": string }
+  const data = await res.json();
+  return { success: true, filename: file.name };
 }

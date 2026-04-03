@@ -1,14 +1,17 @@
 import os
 import shutil
-import uuid
+import time
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from llama_index.core.llms import ChatMessage
 
-# -------------------- LOAD ENV --------------------
+# Load env
 load_dotenv()
+
+# -------------------- API KEY --------------------
 api_key = os.getenv("GOOGLE_API_KEY")
 
 # -------------------- LLM --------------------
@@ -32,46 +35,47 @@ from llama_index.core import Settings
 Settings.llm = llm
 Settings.embed_model = embed_model
 
-# -------------------- LLAMA INDEX --------------------
-from llama_index.core import (
-    SimpleDirectoryReader,
-    VectorStoreIndex
-)
-from llama_index.core.node_parser import SimpleNodeParser
-from llama_index.vector_stores.faiss import FaissVectorStore
-from llama_index.core.llms import ChatMessage
-
+# -------------------- FAISS --------------------
 import faiss
+from llama_index.vector_stores.faiss import FaissVectorStore
 
-# -------------------- FASTAPI --------------------
-app = FastAPI()
+faiss_index = faiss.IndexFlatL2(384)
+vector_store = FaissVectorStore(faiss_index=faiss_index)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # adjust in production
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# -------------------- DOC LOADER --------------------
+from llama_index.core import SimpleDirectoryReader, VectorStoreIndex
+from llama_index.core.node_parser import SimpleNodeParser
 
-# -------------------- SESSION STORE --------------------
-# Stores per-session data
-sessions = {}
+DATA_PATH = "data"
+os.makedirs(DATA_PATH, exist_ok=True)
 
-# -------------------- REQUEST MODELS --------------------
-class UploadResponse(BaseModel):
-    session_id: str
+import os
+from llama_index.core import StorageContext, load_index_from_storage
 
-class QueryRequest(BaseModel):
-    session_id: str
-    question: str
-    history: list = []
+PERSIST_DIR = "storage"
 
+def build_index():
+    import os
+    from llama_index.core import StorageContext, load_index_from_storage
 
-# -------------------- BUILD INDEX --------------------
-def build_index(data_path):
+    PERSIST_DIR = "storage"
+
+    # ✅ Load from storage if exists
+    if os.path.exists(PERSIST_DIR):
+        print("⚡ Loading index from storage...")
+        storage_context = StorageContext.from_defaults(persist_dir=PERSIST_DIR)
+        return load_index_from_storage(storage_context)
+
+    print("⚡ Creating new index...")
+
+    # Prevent ValueError if data directory is initially empty on deploy
+    has_docs = any(f.endswith('.pdf') or f.endswith('.txt') for f in os.listdir(DATA_PATH))
+    if not has_docs:
+        with open(os.path.join(DATA_PATH, "dummy.txt"), "w") as f:
+            f.write("System initialized. Awaiting user documents.")
+
     documents = SimpleDirectoryReader(
-        data_path,
+        DATA_PATH,
         required_exts=[".pdf", ".txt"]
     ).load_data()
 
@@ -80,75 +84,80 @@ def build_index(data_path):
         chunk_overlap=100
     )
 
+    # 🔥 STEP 1: Create chunks
     nodes = parser.get_nodes_from_documents(documents)
 
-    # Filter small chunks
+    print(f"Before filtering: {len(nodes)}")
+
+    # 🔥 STEP 2: FILTER BAD CHUNKS (ADD HERE ✅)
     nodes = [n for n in nodes if len(n.text.strip()) > 50]
 
-    # Create NEW FAISS index per session
-    faiss_index = faiss.IndexFlatL2(384)
-    vector_store = FaissVectorStore(faiss_index=faiss_index)
+    print(f"After filtering: {len(nodes)}")
 
+    # 🔥 STEP 3: Create index
     index = VectorStoreIndex(nodes, vector_store=vector_store)
+
+    # 🔥 STEP 4: Save index
+    index.storage_context.persist(persist_dir=PERSIST_DIR)
+
+    print("✅ Index saved!")
 
     return index
 
 
-# -------------------- UPLOAD (NEW SESSION) --------------------
-@app.post("/upload", response_model=UploadResponse)
-async def upload(file: UploadFile = File(...)):
-    
-    # Create unique session
-    session_id = str(uuid.uuid4())
+# -------------------- FASTAPI --------------------
+app = FastAPI()
 
-    session_path = f"data/{session_id}"
-    os.makedirs(session_path, exist_ok=True)
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://pdf-chat-companion.vercel.app",
+        "http://116.202.210.102"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-    file_path = os.path.join(session_path, file.filename)
+# @app.get("/")
+# def read_root():
+#     return {"message": "Hello World"}
 
-    # Save file
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+index = None
 
-    # Build index for THIS session only
-    index = build_index(session_path)
-
-    # Store session
-    sessions[session_id] = {
-        "index": index
-    }
-
-    return {"session_id": session_id}
+@app.on_event("startup")
+def startup():
+    global index
+    index = build_index()
 
 
-# -------------------- CHAT --------------------
+# -------------------- REQUEST MODEL --------------------
+class QueryRequest(BaseModel):
+    question: str
+    history: list = []   # chat memory
+
+
+# -------------------- STREAMING CHAT -------------------
 @app.post("/chat")
 async def chat(req: QueryRequest):
-
-    # Validate session
-    if req.session_id not in sessions:
-        return {"error": "Invalid session_id. Please upload file again."}
-
-    index = sessions[req.session_id]["index"]
-
-    # Create chat engine
+    global index
+    
+    # 1. Initialize chat engine with streaming enabled
     chat_engine = index.as_chat_engine(
-        chat_mode="context",
+        chat_mode="context", 
         streaming=True,
         similarity_top_k=5
     )
 
-    # Convert history
+    # 2. Map history to LlamaIndex ChatMessage objects
     chat_history = [
-        ChatMessage(role=m["role"], content=m["text"])
+        ChatMessage(role=m["role"], content=m["text"]) 
         for m in req.history
     ]
 
-    # Streaming response
-    response = chat_engine.stream_chat(
-        req.question,
-        chat_history=chat_history
-    )
+    # 3. Get streaming response
+    response = chat_engine.stream_chat(req.question, chat_history=chat_history)
 
     async def stream_generator():
         for token in response.response_gen:
@@ -157,18 +166,20 @@ async def chat(req: QueryRequest):
     return StreamingResponse(stream_generator(), media_type="text/plain")
 
 
-# -------------------- OPTIONAL: DELETE SESSION --------------------
-@app.delete("/session/{session_id}")
-async def delete_session(session_id: str):
+# -------------------- PDF UPLOAD --------------------
+@app.post("/upload")
+async def upload(file: UploadFile = File(...)):
+    file_path = os.path.join(DATA_PATH, file.filename)
 
-    if session_id in sessions:
-        del sessions[session_id]
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
 
-        # delete files
-        session_path = f"data/{session_id}"
-        if os.path.exists(session_path):
-            shutil.rmtree(session_path)
+    # Delete old cached database so we can recreate it with completely new PDFs
+    if os.path.exists(PERSIST_DIR):
+        shutil.rmtree(PERSIST_DIR)
 
-        return {"message": "Session deleted"}
+    # rebuild index after upload
+    global index
+    index = build_index()
 
-    return {"error": "Session not found"}
+    return {"message": "File uploaded & indexed successfully"}
