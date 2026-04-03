@@ -7,10 +7,9 @@ import { useChatStore } from "@/hooks/useChatStore";
 import { streamChat, uploadFile } from "@/services/api";
 import type { UploadStatus } from "@/types/chat";
 
-
 interface ChatPageProps {
   userName: string;
-  userImage: string;   // ✅ NEW
+  userImage: string;
   onLogout: () => void;
 }
 
@@ -20,6 +19,7 @@ export default function Chat({ userName, userImage, onLogout }: ChatPageProps) {
   const [uploadStatus, setUploadStatus] = useState<UploadStatus | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
+  // -------------------- ENSURE SESSION --------------------
   const ensureSession = useCallback(() => {
     if (!store.activeId) {
       return store.createSession();
@@ -27,29 +27,53 @@ export default function Chat({ userName, userImage, onLogout }: ChatPageProps) {
     return store.activeId;
   }, [store]);
 
+  // -------------------- SEND MESSAGE --------------------
   const handleSend = useCallback(
     async (text: string) => {
       const sessionId = ensureSession();
       if (!sessionId || isStreaming) return;
 
+      const session = store.sessions.find((s) => s.id === sessionId);
+      const backendSessionId = session?.backendSessionId;
+
+      // ❌ Prevent chat without upload
+      if (!backendSessionId) {
+        store.addMessage(sessionId, {
+          role: "bot",
+          content: "⚠️ Please upload a document first.",
+        });
+        return;
+      }
+
+      // Add user + empty bot message
       store.addMessage(sessionId, { role: "user", content: text });
       store.addMessage(sessionId, { role: "bot", content: "" });
 
       setIsStreaming(true);
 
       try {
-        const session = store.sessions.find((s) => s.id === sessionId);
         const history = (session?.messages ?? [])
           .filter((m) => m.role !== "file")
-          .map((m) => ({ role: m.role, content: m.content }));
+          .map((m) => ({
+            role: m.role,
+            content: m.content,
+          }));
 
         let accumulated = "";
-        for await (const chunk of streamChat(text, history)) {
+
+        for await (const chunk of streamChat(
+          text,
+          history,
+          backendSessionId
+        )) {
           accumulated += chunk;
           store.updateLastBotMessage(sessionId, accumulated);
         }
       } catch {
-        store.updateLastBotMessage(sessionId, "⚠️ Error getting response. Please try again.");
+        store.updateLastBotMessage(
+          sessionId,
+          "⚠️ Error getting response. Please try again."
+        );
       } finally {
         setIsStreaming(false);
       }
@@ -57,28 +81,39 @@ export default function Chat({ userName, userImage, onLogout }: ChatPageProps) {
     [ensureSession, isStreaming, store]
   );
 
+  // -------------------- FILE UPLOAD --------------------
   const handleFileSelect = useCallback(
     async (file: File) => {
       const sessionId = ensureSession();
       if (!sessionId) return;
 
-      setUploadStatus({ type: "uploading", message: `Uploading ${file.name}…` });
+      setUploadStatus({
+        type: "uploading",
+        message: `Uploading ${file.name}…`,
+      });
 
       try {
         const result = await uploadFile(file);
-        if (result.success) {
-          setUploadStatus({ type: "success", message: `${file.name} uploaded successfully!` });
-          store.addMessage(sessionId, {
-            role: "file",
-            content: `Uploaded: ${file.name}`,
-            fileName: file.name,
-            fileType: file.type,
-          });
-        } else {
-          setUploadStatus({ type: "error", message: "Upload failed. Try again." });
-        }
+
+        // ✅ Store backend session ID
+        store.setBackendSessionId(sessionId, result.session_id);
+
+        setUploadStatus({
+          type: "success",
+          message: `${file.name} uploaded successfully!`,
+        });
+
+        store.addMessage(sessionId, {
+          role: "file",
+          content: `Uploaded: ${file.name}`,
+          fileName: file.name,
+          fileType: file.type,
+        });
       } catch {
-        setUploadStatus({ type: "error", message: "Upload failed. Check your connection." });
+        setUploadStatus({
+          type: "error",
+          message: "Upload failed. Check your connection.",
+        });
       }
     },
     [ensureSession, store]
@@ -95,7 +130,7 @@ export default function Chat({ userName, userImage, onLogout }: ChatPageProps) {
         onClearAll={store.clearAllSessions}
         onLogout={onLogout}
         userName={userName}
-        userImage={userImage}   // ✅ NEW
+        userImage={userImage}
         open={sidebarOpen}
         onToggle={() => setSidebarOpen((o) => !o)}
       />

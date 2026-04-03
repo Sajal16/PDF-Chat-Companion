@@ -32,6 +32,7 @@ export function useChatStore() {
 
   const activeSession = sessions.find((s) => s.id === activeId) ?? null;
 
+  // -------------------- CREATE SESSION --------------------
   const createSession = useCallback(() => {
     const newSession: ChatSession = {
       id: generateId(),
@@ -40,12 +41,31 @@ export function useChatStore() {
       createdAt: Date.now(),
       updatedAt: Date.now(),
       hasDocuments: false,
+
+      // ✅ backend session initially empty
+      backendSessionId: undefined,
     };
+
     setSessions((prev) => [newSession, ...prev]);
     setActiveId(newSession.id);
     return newSession.id;
   }, []);
 
+  // -------------------- SET BACKEND SESSION ID --------------------
+  const setBackendSessionId = useCallback(
+    (sessionId: string, backendSessionId: string) => {
+      setSessions((prev) =>
+        prev.map((s) =>
+          s.id === sessionId
+            ? { ...s, backendSessionId }
+            : s
+        )
+      );
+    },
+    []
+  );
+
+  // -------------------- ADD MESSAGE --------------------
   const addMessage = useCallback(
     (sessionId: string, message: Omit<Message, "id" | "timestamp">) => {
       const msg: Message = {
@@ -53,15 +73,18 @@ export function useChatStore() {
         id: generateId(),
         timestamp: Date.now(),
       };
+
       setSessions((prev) =>
         prev.map((s) => {
           if (s.id !== sessionId) return s;
+
           const updated = {
             ...s,
             messages: [...s.messages, msg],
             updatedAt: Date.now(),
             hasDocuments: s.hasDocuments || message.role === "file",
           };
+
           // Auto-title from first user message
           if (
             updated.title === "New Chat" &&
@@ -71,27 +94,37 @@ export function useChatStore() {
               message.content.slice(0, 40) +
               (message.content.length > 40 ? "…" : "");
           }
+
           return updated;
         })
       );
+
       return msg;
     },
     []
   );
 
+  // -------------------- UPDATE LAST BOT MESSAGE --------------------
   const updateLastBotMessage = useCallback(
     (sessionId: string, content: string) => {
       setSessions((prev) =>
         prev.map((s) => {
           if (s.id !== sessionId) return s;
+
           const msgs = [...s.messages];
           let lastBot = -1;
+
           for (let i = msgs.length - 1; i >= 0; i--) {
-            if (msgs[i].role === "bot") { lastBot = i; break; }
+            if (msgs[i].role === "bot") {
+              lastBot = i;
+              break;
+            }
           }
+
           if (lastBot !== -1) {
             msgs[lastBot] = { ...msgs[lastBot], content };
           }
+
           return { ...s, messages: msgs, updatedAt: Date.now() };
         })
       );
@@ -99,9 +132,11 @@ export function useChatStore() {
     []
   );
 
+  // -------------------- DELETE SESSION --------------------
   const deleteSession = useCallback(
     (sessionId: string) => {
       setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+
       if (activeId === sessionId) {
         setSessions((prev) => {
           setActiveId(prev[0]?.id ?? null);
@@ -112,6 +147,7 @@ export function useChatStore() {
     [activeId]
   );
 
+  // -------------------- CLEAR ALL --------------------
   const clearAllSessions = useCallback(() => {
     setSessions([]);
     setActiveId(null);
@@ -127,5 +163,8 @@ export function useChatStore() {
     updateLastBotMessage,
     deleteSession,
     clearAllSessions,
+
+    // ✅ NEW EXPORT
+    setBackendSessionId,
   };
 }
